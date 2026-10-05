@@ -1,0 +1,57 @@
+# Fixture ontology for Playwright. No ClickUp or LLM involved.
+version: 1
+nodes:
+  - id: define-goals
+    title: Define goals
+    summary: |
+      Agree on what the application must achieve before anything else [1]. Write down success
+      metrics and constraints so later steps can be checked against them [2].
+    checklist:
+      - {id: goals-written, text: Goals written down}
+      - {id: metrics-agreed, text: Success metrics agreed}
+    citations:
+      - {n: 1, chunk_id: chunk-goals, excerpt: "Start every project by agreeing its goals.", url: "https://app.clickup.com/1/v/dc/d1/p1", doc_title: "Playbook / Goals"}
+      - {n: 2, chunk_id: chunk-metrics, excerpt: "Define measurable success metrics.", url: "https://app.clickup.com/1/v/dc/d1/p2", doc_title: "Playbook / Metrics"}
+  - id: procure-data
+    title: Procure data
+    summary: Find and license the data the application needs [1].
+    checklist:
+      - {id: sources-found, text: Data sources identified}
+    citations:
+      - {n: 1, chunk_id: chunk-data, excerpt: "Identify data sources and licensing.", url: "https://app.clickup.com/1/v/dc/d2/p1", doc_title: "Data / Sources"}
+  - id: system-design
+    title: System design
+    summary: Sketch the architecture.
+  - id: security-review
+    title: Security review
+    summary: Threat-model the design [1].
+    citations:
+      - {n: 1, chunk_id: chunk-retired, excerpt: "An old passage.", url: "https://app.clickup.com/1/v/dc/d3/p1", doc_title: "Security / Old"}
+  - id: deploy
+    title: Deploy
+    summary: Ship it.
+  - id: monitoring
+    title: Monitoring
+    summary: Watch production.
+    checklist:
+      - {id: dashboards, text: Dashboards exist}
+  - id: observability
+    title: Observability
+    summary: Logs and traces.
+    checklist:
+      - {id: tracing, text: Tracing enabled}
+  - id: write-docs
+    title: Write docs
+    summary: Document the system.
+  - id: load-testing
+    title: Load testing
+    summary: Proposed by the last build.
+    status: proposed
+edges:
+  - {from: define-goals, to: procure-data}
+  - {from: define-goals, to: system-design}
+  - {from: system-design, to: security-review}
+  - {from: procure-data, to: deploy}
+  - {from: security-review, to: deploy}
+  - {from: deploy, to: monitoring}
+  - {from: security-review, to: load-testing, status: proposed}

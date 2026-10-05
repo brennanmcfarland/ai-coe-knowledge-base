@@ -1,0 +1,12 @@
+# Never graph scraped ClickUp content or derived data.
+data/
+.cache/
+frontend/e2e/.data/
+frontend/e2e/fixtures/
+# Dependencies and build output.
+node_modules/
+.venv/
+frontend/dist/
+graphify-out/
+# Planning docs aren't code.
+*.md

@@ -1,0 +1,51 @@
+[project]
+name = "coe-wizard"
+version = "0.1.0"
+description = "Local-only wizard that turns a ClickUp knowledge base into a curated DAG of development steps"
+authors = [
+    { name = "Brennan McFarland", email = "brennanfrancismcfarland@gmail.com" }
+]
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "fastapi>=0.142.2",
+    "httpx>=0.28.1",
+    "keyring>=25.7.0",
+    "pydantic>=2.13.5",
+    "ruamel-yaml>=0.19.1",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.scripts]
+coe-wizard = "coe_wizard.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.16,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "graphifyy>=0.9.77",
+    "pyright>=1.1.414",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "respx>=0.23.1",
+    "ruff>=0.16.10",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.14"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

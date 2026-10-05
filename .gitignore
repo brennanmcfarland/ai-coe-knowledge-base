@@ -1,0 +1,26 @@
+# Local data: scraped ClickUp corpus, chunks, curated ontology + backups, progress DB.
+# Never commit: it is derived from internal ClickUp content.
+data/
+
+# llama.cpp binaries and GGUF models
+.cache/
+
+# graphify output (rebuilt locally by ./graphify.sh)
+graphify-out/
+
+# Secrets
+.env*
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+frontend/e2e/.data/
