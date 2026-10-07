@@ -1,7 +1,7 @@
-"""ClickUp OAuth.
+"""ClickUp OAuth, or a personal API token for workspaces where you can't register an OAuth app.
 
-The client id/secret live in the OS keyring. The access token lives only in process memory, so
-every backend restart requires a fresh login.
+The client id/secret live in the OS keyring. The access token (OAuth or personal) lives only in
+process memory, so every backend restart requires a fresh login.
 """
 
 import secrets
@@ -13,6 +13,8 @@ from urllib.parse import urlencode
 import httpx
 import keyring
 from keyring.errors import KeyringError
+
+from .clickup import auth_header
 
 AUTHORIZE_URL = "https://app.clickup.com/api"
 TOKEN_URL = "https://api.clickup.com/api/v2/oauth/token"
@@ -121,9 +123,20 @@ class AuthManager:
         token = resp.json().get("access_token")
         if not token:
             raise AuthError("Token exchange returned no access_token")
-        user_resp = await self.http.get(USER_URL, headers={"Authorization": f"Bearer {token}"})
+        user_resp = await self.http.get(USER_URL, headers=auth_header(token))
         self.token = token
         self.user = user_resp.json().get("user") if user_resp.status_code == 200 else None
+
+    async def use_personal_token(self, token: str) -> None:
+        """Log in with a personal API token, checked against ClickUp before it is kept."""
+        token = token.strip()
+        if not token.startswith("pk_"):
+            raise AuthError("Not a ClickUp personal API token (expected pk_…)")
+        resp = await self.http.get(USER_URL, headers=auth_header(token))
+        if resp.status_code != 200:
+            raise AuthError(f"ClickUp rejected the token ({resp.status_code})")
+        self.token = token
+        self.user = resp.json().get("user")
 
     def logout(self) -> None:
         self.token = None

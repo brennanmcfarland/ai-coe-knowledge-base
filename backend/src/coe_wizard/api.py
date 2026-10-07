@@ -62,6 +62,19 @@ def auth_setup(body: SetupBody, svc: Svc) -> dict[str, bool]:
     return {"configured": True}
 
 
+class TokenBody(BaseModel):
+    token: str
+
+
+@router.post("/auth/token")
+async def auth_token(body: TokenBody, svc: Svc) -> dict[str, bool]:
+    try:
+        await svc.auth.use_personal_token(body.token)
+    except AuthError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"logged_in": True}
+
+
 @router.get("/auth/login")
 def auth_login(svc: Svc) -> RedirectResponse:
     try:

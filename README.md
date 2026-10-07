@@ -22,7 +22,14 @@ quality.
 (cd frontend && npm install && npx playwright install chromium)
 ```
 
-## ClickUp OAuth setup (once)
+## ClickUp login
+`./scrape.sh` asks for a **personal API token** (ClickUp → avatar → **Settings → Apps → API
+Token**, starts with `pk_`). The token is only held in the backend's memory. You paste it again
+after every backend restart, and it's never written to disk. Personal tokens don't expire and
+can access everything your account can, so only use one for workspaces where that risk is
+acceptable, and regenerate it if it leaks. Leave the prompt blank to use OAuth instead.
+
+### OAuth setup (once; needs workspace admin to create the app)
 1. In ClickUp: **Settings → Integrations → ClickUp API → Create an App**.
 2. Redirect URL: `http://127.0.0.1:8765/api/auth/callback`. If you use `./dev.sh`, also add
    `http://127.0.0.1:5173/api/auth/callback`.
@@ -30,15 +37,14 @@ quality.
    and stores them in your OS keyring. They're never written to a file.
 
 The access token is kept **only in the backend's memory**: you log in again after every restart.
-No environment variables or `.env` files are read. If you previously used a personal API token,
-revoke it in ClickUp.
+No environment variables or `.env` files are read.
 
 ## Usage
 | Command | What it does |
 |---|---|
 | `./serve.sh` | Build the frontend and serve the app at http://127.0.0.1:8765 |
 | `./dev.sh` | Backend + Vite dev server with hot reload at http://127.0.0.1:5173 |
-| `./scrape.sh` | Log in if needed (opens the browser), then sync ClickUp Docs into `data/corpus/`. Incremental; rate limited to 60 req/min (`COE_RPM` to change) |
+| `./scrape.sh` | Log in if needed (prompts for a token, or opens the browser for OAuth), then sync ClickUp Docs into `data/corpus/`. Incremental; rate limited to 60 req/min (`COE_RPM` to change) |
 | `./build_ontology.sh` | Chunk the corpus and (re)build the step graph with a local LLM. First run downloads llama.cpp (Vulkan) and Qwen3-30B-A3B-Instruct-2507 Q4_K_M into `.cache/` |
 | `./graphify.sh` | Rebuild the code knowledge graph in `graphify-out/` (code only) |
 

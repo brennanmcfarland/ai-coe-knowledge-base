@@ -64,6 +64,31 @@ async def test_state_is_single_use() -> None:
         await m.complete("code", state)
 
 
+@respx.mock
+async def test_personal_token_is_verified_and_sent_raw() -> None:
+    route = respx.get(USER_URL).mock(
+        return_value=httpx.Response(200, json={"user": {"username": "u"}})
+    )
+    m = manager(configured=False)
+    await m.use_personal_token(" pk_123 ")
+    assert m.token == "pk_123" and m.user == {"username": "u"}
+    assert route.calls.last.request.headers["Authorization"] == "pk_123"
+
+
+@respx.mock
+async def test_rejected_personal_token_is_not_kept() -> None:
+    respx.get(USER_URL).mock(return_value=httpx.Response(401, json={"err": "nope"}))
+    m = manager()
+    with pytest.raises(AuthError):
+        await m.use_personal_token("pk_bad")
+    assert m.token is None
+
+
+async def test_non_personal_token_is_rejected() -> None:
+    with pytest.raises(AuthError):
+        await manager().use_personal_token("not-a-pk")
+
+
 def test_missing_state_is_rejected() -> None:
     with pytest.raises(AuthError):
         manager().consume_state(None)

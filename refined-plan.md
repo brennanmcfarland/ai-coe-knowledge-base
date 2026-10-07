@@ -17,7 +17,8 @@ The ClickUp content couldn't be inspected while planning, so the node breakdown 
 | Decision | Choice | Consequence |
 |---|---|---|
 | ClickUp credentials | A first-run setup page stores client_id/secret in the OS keyring (`keyring`). The access token stays in backend memory only. | Nothing secret sits on disk in plaintext. You log in again after every backend restart. |
-| Old env-var token | Removed. No code reads env tokens, and the README is rewritten for OAuth + keyring. | You need to revoke the old personal token in ClickUp. `.env` is never read or edited. |
+| Old env-var token | Removed. No code reads env tokens, and the README is rewritten for OAuth + keyring. | `.env` is never read or edited. |
+| Personal-token login (added later) | `scrape.sh` prompts for a personal API token (`pk_…`, read without echo, piped via stdin) and posts it to `POST /api/auth/token`. It's checked against `/v2/user` and held in memory only, like the OAuth token. A blank answer falls back to OAuth. | Works without a workspace admin creating an OAuth app. The token is long-lived and full-access, so use it only for non-sensitive workspaces. |
 | Login scope | Login is only needed to sync (scrape). The wizard works offline from local data. | `scrape.sh` starts the backend if needed, opens the login page, and triggers the scrape through the backend API, so the token never leaves backend memory. |
 | Network exposure | The backend binds to `127.0.0.1` only. There is no app auth beyond ClickUp, and nothing is pushed anywhere. | Meets the local-only requirement. Anyone with local shell access can use the app, including the editor. |
 | Ontology in git | Gitignored, stored in `data/` next to the corpus. | No ClickUp-derived text reaches GitHub. Curation edits aren't versioned, so the builder and the editor write timestamped backups before every write. |

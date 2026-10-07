@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Sync ClickUp Docs from the configured space into data/corpus/ (gitignored).
 #
-# The OAuth token only ever lives in the backend's memory, so this script drives the backend:
-# it starts one if none is running, opens the login page if you aren't logged in, then triggers
-# the sync and streams its progress. Requests are rate limited (default 60/min; COE_RPM to change).
+# The token only ever lives in the backend's memory, so this script drives the backend: it starts
+# one if none is running and, if you aren't logged in, asks for a personal API token (or opens the
+# OAuth login page if you leave it blank), then triggers the sync and streams its progress. Requests are rate limited (default 60/min; COE_RPM to change).
 #
 # Env: COE_PORT (default 8765), COE_RPM (default 60)
 set -euo pipefail
@@ -36,6 +36,19 @@ if ! curl -sf "$BASE/api/auth/status" >/dev/null; then
     sleep 0.5
   done
   curl -sf "$BASE/api/auth/status" >/dev/null || { echo "Backend failed to start; see data/scrape-server.log" >&2; exit 1; }
+fi
+
+if [[ "$(curl -sf "$BASE/api/auth/status" | json "['logged_in']")" != "True" && -t 0 ]]; then
+  # The token is piped through stdin so it never appears in argv; it's held only in backend memory.
+  read -rsp "ClickUp personal API token (pk_…; leave blank to log in via OAuth in the browser): " TOKEN
+  echo
+  if [[ -n "$TOKEN" ]]; then
+    resp="$(printf '%s' "$TOKEN" \
+      | python3 -c "import json,sys; print(json.dumps({'token': sys.stdin.read()}))" \
+      | curl -s -w '\n%{http_code}' -H 'Content-Type: application/json' -d @- "$BASE/api/auth/token")"
+    unset TOKEN
+    [[ "${resp##*$'\n'}" == "200" ]] || { echo "Token login failed: ${resp%$'\n'*}" >&2; exit 1; }
+  fi
 fi
 
 if [[ "$(curl -sf "$BASE/api/auth/status" | json "['logged_in']")" != "True" ]]; then

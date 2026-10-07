@@ -66,6 +66,11 @@ class RateLimiter:
         self._blocked_until = max(self._blocked_until, self._clock() + seconds)
 
 
+def auth_header(token: str) -> dict[str, str]:
+    """Personal API tokens (pk_…) go in raw; OAuth access tokens are sent as Bearer."""
+    return {"Authorization": token if token.startswith("pk_") else f"Bearer {token}"}
+
+
 class ClickUpError(Exception):
     def __init__(self, status: int, message: str) -> None:
         super().__init__(f"ClickUp API error {status}: {message}")
@@ -82,7 +87,7 @@ class ClickUpClient:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._http = http or httpx.AsyncClient(timeout=60)
-        self._headers = {"Authorization": f"Bearer {token}"}
+        self._headers = auth_header(token)
         self._limiter = limiter or RateLimiter(rpm, sleep=sleep)
         self._sleep = sleep
 
