@@ -8,6 +8,13 @@ the frontier (steps whose prerequisites are done), and each project tracks its o
 Nothing leaves your machine: the backend binds to `127.0.0.1`, serves only its own frontend, and
 the only network calls are to ClickUp (when you sync) and to download the pinned model.
 
+## Documentation
+- [docs/architecture.md](docs/architecture.md): how the whole application fits together, including
+  components, the data pipeline, the domain model, the local LLM, persistence, the API, and the
+  security model.
+- [docs/process.md](docs/process.md): step-by-step guide to installing, scraping ClickUp,
+  building the ontology, serving the app, keeping it up to date, backups, and troubleshooting.
+
 ## Prototype caveats
 This app is heavily prototype/vibe coded and should be treated as such with no guarantees of
 quality.
@@ -49,7 +56,8 @@ No environment variables or `.env` files are read.
 | `./graphify.sh` | Rebuild the code knowledge graph in `graphify-out/` (code only) |
 
 Typical first run: `./scrape.sh`, then `./build_ontology.sh`, then `./serve.sh`. Afterwards, curate
-the graph in **Edit mode**.
+the graph in **Edit mode**. See [docs/process.md](docs/process.md) for the full procedure,
+including the recommended order (start `./serve.sh` first so your login is kept).
 
 `build_ontology.sh` knobs: `LLAMA_DEVICE` (default `Vulkan0`, the discrete GPU), `N_CPU_MOE`
 (default 20 MoE layers kept in system RAM), `CTX_SIZE` (default 32768), `LLAMA_URL` (use an
