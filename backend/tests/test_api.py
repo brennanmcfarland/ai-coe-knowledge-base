@@ -1,4 +1,5 @@
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -74,6 +75,24 @@ def test_invalid_ontology_is_reported(client: TestClient, tmp_path: Path) -> Non
 
 def test_sync_requires_login(client: TestClient) -> None:
     assert client.post("/api/sync").status_code == 401
+
+
+def test_sync_runs_when_logged_in(client: TestClient) -> None:
+    svc = client.app.state.services  # type: ignore[attr-defined]
+    svc.auth.token = "pk_test"
+
+    async def fake_scrape(log: Callable[[str], None]) -> None:
+        log("scraped")
+
+    svc.run_scrape = fake_scrape
+    assert client.post("/api/sync").status_code == 202
+    status = client.get("/api/sync").json()
+    for _ in range(50):
+        if status["state"] != "running":
+            break
+        time.sleep(0.01)
+        status = client.get("/api/sync").json()
+    assert status["state"] == "succeeded" and status["messages"] == ["scraped"]
 
 
 def test_auth_setup_and_login_redirect(client: TestClient) -> None:

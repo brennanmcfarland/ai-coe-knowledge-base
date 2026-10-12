@@ -1,11 +1,12 @@
+import json
+from pathlib import Path
 from typing import Any
 
 from coe_wizard.chunks import Chunk
 from coe_wizard.ontology.model import Ontology
 from coe_wizard.ontology.pipeline import (
-    EDGE_SCHEMA,
     MAP_SCHEMA,
-    REDUCE_SCHEMA,
+    MERGE_SCHEMA,
     SUMMARY_SCHEMA,
     build_ontology,
     render_citations,
@@ -15,15 +16,31 @@ from .conftest import make_onto
 
 
 class FakeLLM:
-    """Scripted stand-in for llama-server, keyed by which schema is requested."""
+    """Scripted stand-in for llama-server, keyed by which schema is requested.
 
-    def __init__(self) -> None:
+    `place`, `duplicate` and `reuse` map a substring of the prompt to the answer to give.
+    """
+
+    def __init__(
+        self,
+        place: dict[str, str] | None = None,
+        duplicate: dict[str, str] | None = None,
+        reuse: dict[str, str] | None = None,
+    ) -> None:
         self.prompts: list[str] = []
+        self.place = place or {}
+        self.duplicate = duplicate or {}
+        self.reuse = reuse or {}
+
+    @staticmethod
+    def _pick(table: dict[str, str], prompt: str, default: str) -> str:
+        return next((v for k, v in table.items() if k in prompt), default)
 
     async def complete(self, prompt: str, json_schema: dict[str, Any]) -> dict[str, Any]:
         self.prompts.append(prompt)
+        props = json_schema["properties"]
         if json_schema is MAP_SCHEMA:
-            if "security" in prompt:
+            if "security review process" in prompt:
                 return {
                     "steps": [
                         {
@@ -31,6 +48,12 @@ class FakeLLM:
                             "description": "Threat model",
                             "checklist": ["Run threat model", "Run threat model "],
                         }
+                    ]
+                }
+            if "audit trail" in prompt:
+                return {
+                    "steps": [
+                        {"title": "Audit", "description": "Audit it", "checklist": ["Log access"]}
                     ]
                 }
             return {
@@ -42,33 +65,28 @@ class FakeLLM:
                     }
                 ]
             }
-        if json_schema is REDUCE_SCHEMA:
-            return {
-                "nodes": [
-                    {
-                        "id": "Procure Data",
-                        "title": "Procure data",
-                        "description": "d",
-                        "checklist": ["Find sources"],
-                        "members": [0],
-                    },
-                    {
-                        "id": "security-review",
-                        "title": "Security review",
-                        "description": "d",
-                        "checklist": ["Run threat model"],
-                        "members": [1, 99],
-                    },
-                ]
-            }
-        if json_schema is EDGE_SCHEMA:
-            return {
-                "edges": [
-                    {"from": "procure-data", "to": "security-review", "confidence": 0.9},
-                    {"from": "security-review", "to": "procure-data", "confidence": 0.2},
-                    {"from": "ghost", "to": "procure-data", "confidence": 1},
-                ]
-            }
+        candidate = prompt.rsplit("\n\n", 1)[-1]
+        if "match" in props:
+            out = {"match": self._pick(self.place, candidate, "new")}
+            assert out["match"] in props["match"]["enum"]
+            if "reuse_id" in props:
+                out["reuse_id"] = self._pick(self.reuse, candidate, "none")
+            return out
+        if "duplicate_of" in props:
+            choice = self._pick(self.duplicate, candidate, "none")
+            assert choice in props["duplicate_of"]["enum"]
+            return {"duplicate_of": choice}
+        if json_schema is MERGE_SCHEMA:
+            return {"title": "Merged", "description": "m", "checklist": ["Merged item"]}
+        if "prerequisites" in props:
+            allowed = props["prerequisites"]["items"]["properties"]["id"]["enum"]
+            if '"procure-data" (' in prompt:
+                prereqs = [{"id": "security-review", "confidence": 0.2}]
+            elif '"security-review" (' in prompt:
+                prereqs = [{"id": "procure-data", "confidence": 0.9}]
+            else:
+                prereqs = []
+            return {"prerequisites": [p for p in prereqs if p["id"] in allowed]}
         if json_schema is SUMMARY_SCHEMA:
             return {"summary": "Do it [S1]. Again [S1][S9]."}
         raise AssertionError("unexpected schema")
@@ -78,6 +96,7 @@ CHUNKS = {
     "c1": Chunk("c1", "d", "p1", "Doc", "Data", "https://u/1", "procure data from sources"),
     "c2": Chunk("c2", "d", "p2", "Doc", "Sec", "https://u/2", "security review process"),
 }
+AUDIT = Chunk("c3", "d", "p3", "Doc", "Audit", "https://u/3", "audit trail")
 
 
 async def test_pipeline_builds_valid_dag_with_citations() -> None:
@@ -91,11 +110,31 @@ async def test_pipeline_builds_valid_dag_with_citations() -> None:
     assert [(c.n, c.chunk_id, c.url) for c in sec.citations] == [(1, "c2", "https://u/2")]
 
 
-async def test_existing_ids_are_offered_to_reducer() -> None:
-    llm = FakeLLM()
-    await build_ontology(llm, CHUNKS, make_onto(["procure-data"], []))
-    reduce_prompt = next(p for p in llm.prompts if "Merge these candidate" in p)
-    assert "- procure-data: Procure-Data" in reduce_prompt
+async def test_existing_ids_are_offered_for_reuse() -> None:
+    llm = FakeLLM(reuse={"Security review": "sec"})
+    onto = await build_ontology(llm, CHUNKS, make_onto(["procure-data", "sec"], []))
+    place_prompt = next(p for p in llm.prompts if "Decide where the candidate" in p)
+    assert "- procure-data: Procure-Data" in place_prompt
+    assert [n.id for n in onto.nodes] == ["procure-data", "sec"]
+
+
+async def test_matching_candidate_is_merged_into_step(tmp_path: Path) -> None:
+    doc_path = tmp_path / "steps.jsonl"
+    llm = FakeLLM(place={"Audit": "security-review"})
+    onto = await build_ontology(llm, {**CHUNKS, "c3": AUDIT}, Ontology(), doc_path=doc_path)
+    assert [n.id for n in onto.nodes] == ["procure-data", "security-review"]
+    assert onto.nodes[1].title == "Merged"
+    steps = [json.loads(line) for line in doc_path.read_text().splitlines()]
+    assert [s["id"] for s in steps] == ["procure-data", "security-review"]
+    assert steps[1]["chunk_ids"] == ["c2", "c3"]
+
+
+async def test_consolidation_merges_duplicates() -> None:
+    llm = FakeLLM(duplicate={'"id": "audit"': "security-review"})
+    onto = await build_ontology(llm, {**CHUNKS, "c3": AUDIT}, Ontology())
+    assert [n.id for n in onto.nodes] == ["procure-data", "security-review"]
+    assert [c.chunk_id for c in onto.nodes[1].citations] == ["c2"]
+    assert onto.nodes[1].title == "Merged"
 
 
 def test_render_citations_numbers_by_first_use() -> None:

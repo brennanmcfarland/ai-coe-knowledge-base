@@ -53,7 +53,10 @@ def build_ontology(args: argparse.Namespace) -> None:
     async def run() -> None:
         llm = LlamaServerBackend(args.llama_url)
         try:
-            built = await run_pipeline(llm, chunks, existing, lambda m: print(m, flush=True))
+            print(f"Running step doc: {settings.steps_path}", flush=True)
+            built = await run_pipeline(
+                llm, chunks, existing, lambda m: print(m, flush=True), settings.steps_path
+            )
         finally:
             await llm.aclose()
         # Merge against the file as it is *now*, so edits made during the build survive.

@@ -39,6 +39,11 @@ class Settings:
         return self.data_dir / "chunks.jsonl"
 
     @property
+    def steps_path(self) -> Path:
+        """Running step doc the ontology build edits item by item (inspect it mid-build)."""
+        return self.data_dir / "ontology-steps.jsonl"
+
+    @property
     def ontology_path(self) -> Path:
         return self.data_dir / "ontology.yaml"
 

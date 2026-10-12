@@ -107,7 +107,7 @@ def auth_logout(svc: Svc) -> dict[str, bool]:
 
 
 @router.post("/sync", status_code=202)
-def start_sync(svc: Svc) -> dict[str, str]:
+async def start_sync(svc: Svc) -> dict[str, str]:  # async: the job is scheduled on the event loop
     if not svc.auth.logged_in:
         raise HTTPException(401, "Log in to ClickUp first")
     if not svc.sync.start(svc.run_scrape):
