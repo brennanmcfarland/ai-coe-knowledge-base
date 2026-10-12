@@ -18,11 +18,12 @@ export default defineConfig({
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
     // Built frontend served by the real backend against throwaway fixture data:
-    // no ClickUp, no LLM, credentials kept in memory instead of the OS keyring.
+    // no ClickUp, a scripted model instead of llama.cpp (--fake-llm, see backend fake_llm.py),
+    // credentials kept in memory instead of the OS keyring.
     command:
       'node e2e/prepare-data.mjs && npm run build && ' +
-      `uv run --project ../backend coe-wizard --data-dir e2e/.data --port ${PORT} --static-dir dist ` +
-      'serve --memory-credentials',
+      `uv run --project ../backend coe-wizard --data-dir e2e/.data --cache-dir e2e/.data/cache ` +
+      `--port ${PORT} --static-dir dist serve --memory-credentials --fake-llm`,
     url: `http://127.0.0.1:${PORT}/api/auth/status`,
     reuseExistingServer: false,
     timeout: 180_000,

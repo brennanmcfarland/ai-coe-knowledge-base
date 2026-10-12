@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react'
-import { edits, type GraphNode } from '@/api'
+import { edits, type GraphNode, type NodeOps } from '@/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
@@ -14,11 +14,12 @@ interface Props {
   node: GraphNode
   run: (fn: (hash: string) => Promise<unknown>) => Promise<unknown>
   onDone: () => void
+  ops?: NodeOps
 }
 
 let draftSeq = 0
 
-export function ChecklistEditor({ node, run, onDone }: Props) {
+export function ChecklistEditor({ node, run, onDone, ops = edits }: Props) {
   const [items, setItems] = useState<Draft[]>(() =>
     node.checklist.map((i) => ({ key: i.id, id: i.id, text: i.text })),
   )
@@ -71,7 +72,7 @@ export function ChecklistEditor({ node, run, onDone }: Props) {
         <Button
           size="sm"
           onClick={async () => {
-            await run((h) => edits.setChecklist(h, node.id, items.map(({ id, text }) => ({ id, text }))))
+            await run((h) => ops.setChecklist(h, node.id, items.map(({ id, text }) => ({ id, text }))))
             onDone()
           }}
         >

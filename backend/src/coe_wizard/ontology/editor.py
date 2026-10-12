@@ -3,6 +3,7 @@ removals in `rejected` so rebuilds won't re-propose them."""
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Protocol
 
 from ..chunks import Chunk
 from ..state import ProgressDB
@@ -59,13 +60,67 @@ class CitationInput:
     n: int | None = None
 
 
+def build_checklist(items: list[ChecklistInput]) -> list[ChecklistItem]:
+    out: list[ChecklistItem] = []
+    used: set[str] = set()
+    for item in items:
+        text = item.text.strip()
+        if not text:
+            continue
+        item_id = item.id or checklist_item_id(text)
+        base, i = item_id, 2
+        while item_id in used:
+            item_id, i = f"{base}-{i}", i + 1
+        used.add(item_id)
+        out.append(ChecklistItem(id=item_id, text=text))
+    return out
+
+
+def build_citations(
+    node: Node, items: list[CitationInput], chunks: dict[str, Chunk]
+) -> list[Citation]:
+    existing = {c.chunk_id: c for c in node.citations}
+    next_n = max([c.n for c in node.citations] + [i.n or 0 for i in items], default=0)
+    out: list[Citation] = []
+    for item in items:
+        if item.chunk_id in chunks:
+            if item.n is None:
+                next_n += 1
+            cit = citation_for(chunks[item.chunk_id], item.n or next_n)
+        elif item.chunk_id in existing:  # retired chunk: keep what we had
+            cit = existing[item.chunk_id]
+            if item.n is not None:
+                cit = cit.model_copy(update={"n": item.n})
+        else:
+            raise EditError(422, f"Unknown chunk {item.chunk_id}")
+        out.append(cit)
+    if len({c.n for c in out}) != len(out):
+        raise EditError(422, "Citation markers must be unique")
+    return out
+
+
+class OverlayRefs(Protocol):
+    """Per-project overlays that reference global node ids (see interview/overlay.py)."""
+
+    def retarget(self, source: str, target: str | None) -> None: ...
+
+
 class Editor:
     def __init__(
-        self, store: OntologyStore, db: ProgressDB, chunks: Callable[[], dict[str, Chunk]]
+        self,
+        store: OntologyStore,
+        db: ProgressDB,
+        chunks: Callable[[], dict[str, Chunk]],
+        overlays: OverlayRefs | None = None,
     ) -> None:
         self.store = store
         self.db = db
         self.chunks = chunks
+        self.overlays = overlays
+
+    def _retarget(self, source: str, target: str | None) -> None:
+        if self.overlays is not None:
+            self.overlays.retarget(source, target)
 
     def _apply(self, expected_hash: str, fn: Callable[[Ontology], None]) -> str:
         _, new_hash = self.store.update(expected_hash, lambda o: fn(o) or o)
@@ -113,7 +168,9 @@ class Editor:
 
         with self.db.transaction() as c:
             ProgressDB.set_hidden(c, node_id, True)
-            return self._apply(expected_hash, fn)
+            new_hash = self._apply(expected_hash, fn)
+            self._retarget(node_id, None)
+            return new_hash
 
     def merge_nodes(self, expected_hash: str, source_id: str, target_id: str) -> str:
         if source_id == target_id:
@@ -152,28 +209,18 @@ class Editor:
         with self.db.transaction() as c:
             ProgressDB.migrate_node(c, source_id, target_id)
             try:
-                return self._apply(expected_hash, fn)
+                new_hash = self._apply(expected_hash, fn)
             except ValueError as exc:  # re-validation found a cycle created by the merge
                 raise EditError(409, f"Merge would create a cycle: {exc}") from exc
+            self._retarget(source_id, target_id)
+            return new_hash
 
     # --- Checklist & citations -------------------------------------------------------------
 
     def set_checklist(self, expected_hash: str, node_id: str, items: list[ChecklistInput]) -> str:
         def fn(o: Ontology) -> None:
             n = _node(o, node_id)
-            out: list[ChecklistItem] = []
-            used: set[str] = set()
-            for item in items:
-                text = item.text.strip()
-                if not text:
-                    continue
-                item_id = item.id or checklist_item_id(text)
-                base, i = item_id, 2
-                while item_id in used:
-                    item_id, i = f"{base}-{i}", i + 1
-                used.add(item_id)
-                out.append(ChecklistItem(id=item_id, text=text))
-            n.checklist = out
+            n.checklist = build_checklist(items)
             n.lock("checklist")
 
         return self._apply(expected_hash, fn)
@@ -183,24 +230,9 @@ class Editor:
 
         def fn(o: Ontology) -> None:
             n = _node(o, node_id)
-            existing = {c.chunk_id: c for c in n.citations}
-            next_n = max([c.n for c in n.citations] + [i.n or 0 for i in items], default=0)
-            out: list[Citation] = []
-            for item in items:
-                if item.chunk_id in chunks:
-                    if item.n is None:
-                        next_n += 1
-                    cit = citation_for(chunks[item.chunk_id], item.n or next_n)
-                elif item.chunk_id in existing:  # retired chunk: keep what we had
-                    cit = existing[item.chunk_id]
-                    if item.n is not None:
-                        cit = cit.model_copy(update={"n": item.n})
-                else:
-                    raise EditError(422, f"Unknown chunk {item.chunk_id}")
-                out.append(cit)
-            if len({c.n for c in out}) != len(out):
-                raise EditError(422, "Citation markers must be unique")
-            n.citations = out
+            n.citations = build_citations(n, items, chunks)
+            # Attaching a source clears a promoted step's "Not from KB" flag.
+            n.grounded = n.grounded or bool(n.citations)
             n.lock("citations")
 
         return self._apply(expected_hash, fn)
@@ -245,7 +277,10 @@ class Editor:
             else:
                 _reject_node(o, node_id)
 
-        return self._apply(expected_hash, fn)
+        new_hash = self._apply(expected_hash, fn)
+        if not accept:
+            self._retarget(node_id, None)
+        return new_hash
 
     def resolve_edge(self, expected_hash: str, source: str, target: str, accept: bool) -> str:
         def fn(o: Ontology) -> None:

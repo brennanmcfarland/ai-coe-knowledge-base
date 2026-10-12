@@ -21,6 +21,14 @@ class Settings:
     static_dir: Path | None = field(default=None)
     # The origin the browser uses. Differs from host:port in dev, where Vite proxies /api.
     public_url: str | None = None
+    # Local model: llama.cpp + GGUF live here (shared with build_ontology.sh).
+    cache_dir: Path = REPO_ROOT / ".cache"
+    # An already-running OpenAI-compatible server to use instead of the managed one.
+    llama_url: str | None = None
+    # Seconds the managed llama-server stays loaded after the last interview step.
+    llm_idle_timeout: float = 600
+    # Scripted model for tests (see fake_llm.py).
+    fake_llm: bool = False
 
     @property
     def origin(self) -> str:
@@ -50,6 +58,20 @@ class Settings:
     @property
     def backups_dir(self) -> Path:
         return self.data_dir / "backups"
+
+    @property
+    def interview_path(self) -> Path:
+        return self.data_dir / "interview.yaml"
+
+    @property
+    def projects_dir(self) -> Path:
+        """Per-project tailoring overlays."""
+        return self.data_dir / "projects"
+
+    @property
+    def interviews_dir(self) -> Path:
+        """In-progress interview drafts."""
+        return self.data_dir / "interviews"
 
     @property
     def db_path(self) -> Path:

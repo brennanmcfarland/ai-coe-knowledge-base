@@ -39,6 +39,15 @@ class FakeLLM:
     async def complete(self, prompt: str, json_schema: dict[str, Any]) -> dict[str, Any]:
         self.prompts.append(prompt)
         props = json_schema["properties"]
+        if "facets" in props:  # map step with facet tagging
+            result = await self.complete(prompt, MAP_SCHEMA)
+            if "security review process" in prompt:
+                result["facets"] = {"domain": ["oncology", "not-a-value"]}
+                result["new_values"] = [{"facet": "domain", "value": "Dermatology"}]
+            else:
+                result["facets"] = {"domain": []}
+                result["new_values"] = []
+            return result
         if json_schema is MAP_SCHEMA:
             if "security review process" in prompt:
                 return {
@@ -101,18 +110,32 @@ AUDIT = Chunk("c3", "d", "p3", "Doc", "Audit", "https://u/3", "audit trail")
 
 async def test_pipeline_builds_valid_dag_with_citations() -> None:
     llm = FakeLLM()
-    onto = await build_ontology(llm, CHUNKS, Ontology())
+    onto = (await build_ontology(llm, CHUNKS, Ontology())).ontology
     assert [n.id for n in onto.nodes] == ["procure-data", "security-review"]
     assert [e.key for e in onto.edges] == [("procure-data", "security-review")]  # cycle dropped
     sec = onto.nodes[1]
     assert [i.text for i in sec.checklist] == ["Run threat model"]
     assert sec.summary == "Do it [1]. Again [1]."
     assert [(c.n, c.chunk_id, c.url) for c in sec.citations] == [(1, "c2", "https://u/2")]
+    assert all(n.facets == {} for n in onto.nodes)  # no facets configured: untagged
+
+
+async def test_map_step_tags_chunks_and_nodes_with_facets() -> None:
+    llm = FakeLLM()
+    facets = {"domain": ["oncology", "cardiology"]}
+    built = await build_ontology(llm, CHUNKS, Ontology(), facets=facets)
+    map_prompt = next(p for p in llm.prompts if "security review process" in p)
+    assert "- domain: oncology, cardiology" in map_prompt
+    # Unknown values are dropped; untagged chunks get no entry for the facet.
+    assert built.chunk_facets == {"c1": {}, "c2": {"domain": ["oncology"]}}
+    assert built.new_values == {"domain": ["Dermatology"]}
+    tags = {n.id: n.facets for n in built.ontology.nodes}
+    assert tags == {"procure-data": {}, "security-review": {"domain": ["oncology"]}}
 
 
 async def test_existing_ids_are_offered_for_reuse() -> None:
     llm = FakeLLM(reuse={"Security review": "sec"})
-    onto = await build_ontology(llm, CHUNKS, make_onto(["procure-data", "sec"], []))
+    onto = (await build_ontology(llm, CHUNKS, make_onto(["procure-data", "sec"], []))).ontology
     place_prompt = next(p for p in llm.prompts if "Decide where the candidate" in p)
     assert "- procure-data: Procure-Data" in place_prompt
     assert [n.id for n in onto.nodes] == ["procure-data", "sec"]
@@ -121,7 +144,8 @@ async def test_existing_ids_are_offered_for_reuse() -> None:
 async def test_matching_candidate_is_merged_into_step(tmp_path: Path) -> None:
     doc_path = tmp_path / "steps.jsonl"
     llm = FakeLLM(place={"Audit": "security-review"})
-    onto = await build_ontology(llm, {**CHUNKS, "c3": AUDIT}, Ontology(), doc_path=doc_path)
+    built = await build_ontology(llm, {**CHUNKS, "c3": AUDIT}, Ontology(), doc_path=doc_path)
+    onto = built.ontology
     assert [n.id for n in onto.nodes] == ["procure-data", "security-review"]
     assert onto.nodes[1].title == "Merged"
     steps = [json.loads(line) for line in doc_path.read_text().splitlines()]
@@ -131,7 +155,7 @@ async def test_matching_candidate_is_merged_into_step(tmp_path: Path) -> None:
 
 async def test_consolidation_merges_duplicates() -> None:
     llm = FakeLLM(duplicate={'"id": "audit"': "security-review"})
-    onto = await build_ontology(llm, {**CHUNKS, "c3": AUDIT}, Ontology())
+    onto = (await build_ontology(llm, {**CHUNKS, "c3": AUDIT}, Ontology())).ontology
     assert [n.id for n in onto.nodes] == ["procure-data", "security-review"]
     assert [c.chunk_id for c in onto.nodes[1].citations] == ["c2"]
     assert onto.nodes[1].title == "Merged"

@@ -6,6 +6,7 @@ import './index.css'
 import { Layout } from '@/components/Layout'
 import { EditModeProvider } from '@/lib/editMode'
 import { GraphPage } from '@/pages/GraphPage'
+import { InterviewPage } from '@/pages/InterviewPage'
 import { LoginPage } from '@/pages/LoginPage'
 import { NodePage } from '@/pages/NodePage'
 import { ProjectsPage } from '@/pages/ProjectsPage'
@@ -23,6 +24,7 @@ const router = createBrowserRouter([
       { path: 'projects', element: <ProjectsPage /> },
       { path: 'projects/:pid', element: <GraphPage /> },
       { path: 'projects/:pid/nodes/:nid', element: <NodePage /> },
+      { path: 'interviews/:iid', element: <InterviewPage /> },
     ],
   },
 ])

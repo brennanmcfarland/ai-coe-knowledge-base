@@ -4,8 +4,8 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Iterable, Iterator
-from dataclasses import asdict, dataclass
+from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,8 @@ class Chunk:
     page_title: str
     url: str
     text: str
+    # Facet tags assigned by the ontology build's map step (see facets.py).
+    facets: dict[str, list[str]] = field(default_factory=dict)
 
 
 def normalize(text: str) -> str:
@@ -92,6 +94,14 @@ def write_chunks(path: Path, chunks: Iterable[Chunk]) -> int:
             f.write(json.dumps(asdict(c)) + "\n")
     os.replace(tmp, path)
     return len(seen)
+
+
+def with_facets(
+    chunks: Iterable[Chunk], facets: Mapping[str, dict[str, list[str]]]
+) -> Iterator[Chunk]:
+    """Attach facet tags by chunk id; chunks without an entry keep the tags they have."""
+    for c in chunks:
+        yield replace(c, facets=facets[c.id]) if c.id in facets else c
 
 
 def read_chunks(path: Path) -> dict[str, Chunk]:

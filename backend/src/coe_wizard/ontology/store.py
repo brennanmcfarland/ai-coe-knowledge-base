@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
@@ -70,12 +71,20 @@ def _merge_into(old: Any, new: Any) -> Any:
     return new
 
 
-class OntologyStore:
-    def __init__(self, path: Path, backups_dir: Path) -> None:
+class YamlStore[M: BaseModel]:
+    """A pydantic model persisted as round-trip YAML. Used for the ontology, the interview
+    definition, the per-project overlays and interview drafts. `backups_dir=None` skips backups
+    (drafts are rewritten after every answer)."""
+
+    def __init__(
+        self, path: Path, backups_dir: Path | None, model: type[M], backup_prefix: str = ""
+    ) -> None:
         self.path = path
         self.backups_dir = backups_dir
+        self.model = model
+        self.backup_prefix = backup_prefix
         self._lock = threading.RLock()
-        self._cache: tuple[str, Ontology] | None = None
+        self._cache: tuple[str, M] | None = None
 
     # --- Reading ---------------------------------------------------------------------------
 
@@ -89,18 +98,18 @@ class OntologyStore:
     def _hash(raw: bytes | None) -> str:
         return EMPTY_HASH if raw is None else hashlib.sha256(raw).hexdigest()[:16]
 
-    def load(self) -> tuple[Ontology, str]:
-        """Return the ontology and its content hash. Raises ValueError if the file is invalid."""
+    def load(self) -> tuple[M, str]:
+        """Return the model and its content hash. Raises ValueError if the file is invalid."""
         with self._lock:
             raw = self._raw()
             digest = self._hash(raw)
             if self._cache and self._cache[0] == digest:
                 return self._cache[1].model_copy(deep=True), digest
             if raw is None:
-                onto = Ontology()
+                onto = self.model()
             else:
                 data = _yaml().load(raw) or {}
-                onto = Ontology.model_validate(data)
+                onto = self.model.model_validate(data)
             self._cache = (digest, onto)
             return onto.model_copy(deep=True), digest
 
@@ -121,13 +130,13 @@ class OntologyStore:
                 fcntl.flock(fh, fcntl.LOCK_UN)
 
     def update(
-        self, expected_hash: str | None, mutate: Callable[[Ontology], Ontology | None]
-    ) -> tuple[Ontology, str]:
-        """Apply `mutate` to the current ontology and persist it.
+        self, expected_hash: str | None, mutate: Callable[[M], M | None]
+    ) -> tuple[M, str]:
+        """Apply `mutate` to the current model and persist it.
 
         `expected_hash=None` skips the staleness check (used by the builder, which holds the file
         lock for the whole read-merge-write). `mutate` may modify in place or return a new
-        ontology; the result is re-validated before anything is written.
+        model; the result is re-validated before anything is written.
         """
         with self._file_lock():
             raw = self._raw()
@@ -136,11 +145,20 @@ class OntologyStore:
                 raise StaleHashError(current_hash)
             onto, _ = self.load()
             result = mutate(onto) or onto
-            result = Ontology.model_validate(result.model_dump(by_alias=True))
+            result = self.model.model_validate(result.model_dump(by_alias=True))
             new_hash = self._write(raw, result)
             return result, new_hash
 
-    def _write(self, old_raw: bytes | None, onto: Ontology) -> str:
+    def delete(self) -> None:
+        with self._file_lock():
+            raw = self._raw()
+            if raw is not None:
+                self._backup(raw)
+            self.path.unlink(missing_ok=True)
+            self._cache = None
+        self.path.with_suffix(".lock").unlink(missing_ok=True)
+
+    def _write(self, old_raw: bytes | None, onto: M) -> str:
         y = _yaml()
         new_data = onto.model_dump(by_alias=True, mode="json")
         doc: Any = new_data
@@ -160,9 +178,17 @@ class OntologyStore:
         return digest
 
     def _backup(self, raw: bytes) -> None:
+        if self.backups_dir is None:
+            return
         self.backups_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-        (self.backups_dir / f"ontology-{stamp}.yaml").write_bytes(raw)
-        backups = sorted(self.backups_dir.glob("ontology-*.yaml"))
+        (self.backups_dir / f"{self.backup_prefix}-{stamp}.yaml").write_bytes(raw)
+        # The timestamp starts with a digit, so "project-1-" never matches "project-12-…".
+        backups = sorted(self.backups_dir.glob(f"{self.backup_prefix}-[0-9]*.yaml"))
         for old in backups[:-MAX_BACKUPS]:
             old.unlink(missing_ok=True)
+
+
+class OntologyStore(YamlStore[Ontology]):
+    def __init__(self, path: Path, backups_dir: Path) -> None:
+        super().__init__(path, backups_dir, Ontology, "ontology")

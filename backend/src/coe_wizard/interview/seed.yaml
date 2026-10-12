@@ -1,0 +1,101 @@
+# Interview questions that tailor each project's step graph.
+#
+# Copied to data/interview.yaml when that file is missing; edit that copy (comments survive app
+# edits). Each choice question with `facet: true` is a facet dimension: ontology builds tag every
+# corpus chunk and step with its option values, and a project's answers pick the matching steps
+# and knowledge-base passages. Builds also add `status: proposed` questions/options for review in
+# edit mode. `max_followups` caps the adaptive follow-up questions the LLM may ask per section.
+version: 1
+sections:
+  - id: app
+    title: Application or service
+    max_followups: 3
+  - id: domain
+    title: Clinical or scientific domain
+    max_followups: 3
+  - id: data
+    title: Data types and sources
+    max_followups: 3
+  - id: risk
+    title: Sensitivity and deployment
+    max_followups: 3
+questions:
+  - id: app_type
+    section: app
+    text: What kind of application or service are you building?
+    kind: single
+    facet: true
+    options:
+      - {value: analytics-pipeline, label: Analytics or reporting pipeline}
+      - {value: ml-model, label: ML model or prediction service}
+      - {value: clinical-decision-support, label: Clinical decision support}
+      - {value: research-tool, label: Research or discovery tool}
+      - {value: data-platform, label: Data platform or integration}
+      - {value: llm-app, label: Chatbot or LLM application}
+  - id: app_description
+    section: app
+    text: Describe what it should do, in a sentence or two.
+    kind: text
+  - id: domain
+    section: domain
+    text: Which clinical or scientific domains does it cover?
+    kind: multi
+    facet: true
+    options:
+      - {value: oncology, label: Oncology}
+      - {value: cardiology, label: Cardiology}
+      - {value: neurology, label: Neurology}
+      - {value: infectious-disease, label: Infectious disease}
+      - {value: rare-disease, label: Rare disease}
+      - {value: general, label: General or multi-domain}
+  - id: data_types
+    section: data
+    text: What kinds of data will it use?
+    kind: multi
+    facet: true
+    options:
+      - {value: genomic, label: Genomic or molecular}
+      - {value: imaging, label: Imaging}
+      - {value: ehr, label: EHR or clinical records}
+      - {value: claims, label: Claims or billing}
+      - {value: registry, label: Registry}
+      - {value: clinical-trial, label: Clinical trial}
+      - {value: wearable, label: Wearable or sensor}
+      - {value: clinical-text, label: Clinical notes or free text}
+  - id: data_access
+    section: data
+    text: Where does the data come from?
+    kind: single
+    facet: true
+    options:
+      - {value: public, label: Public datasets only}
+      - {value: internal, label: Internal or partner data}
+      - {value: both, label: Both}
+  - id: sensitivity
+    section: risk
+    text: How sensitive is the data?
+    kind: single
+    facet: true
+    options:
+      - {value: phi, label: Identifiable patient data (PHI/PII)}
+      - {value: deidentified, label: De-identified or limited dataset}
+      - {value: no-patient-data, label: Public, no patient data}
+  - id: deployment
+    section: risk
+    text: Where will it run?
+    kind: single
+    facet: true
+    options:
+      - {value: sandbox, label: Sandbox or research environment}
+      - {value: internal-production, label: Internal production}
+      - {value: external, label: External or patient-facing}
+  - id: users
+    section: risk
+    text: Who will use it?
+    kind: multi
+    facet: true
+    options:
+      - {value: researchers, label: Internal researchers}
+      - {value: clinicians, label: Clinicians}
+      - {value: patients, label: Patients}
+      - {value: partners, label: External partners}

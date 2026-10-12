@@ -1,5 +1,6 @@
 """HTTP API. All routes live under /api."""
 
+import contextlib
 from typing import Annotated, Any
 from urllib.parse import quote
 
@@ -8,6 +9,8 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from .auth import AuthError
+from .interview.overlay import compose, facet_answers
+from .interview.service import InterviewError
 from .ontology.editor import ChecklistInput, CitationInput, EditError
 from .ontology.model import Ontology
 from .ontology.store import StaleHashError
@@ -136,8 +139,13 @@ class ProjectBody(BaseModel):
     name: str = Field(min_length=1, max_length=200)
 
 
-def project_json(p: Any) -> dict[str, Any]:
-    return {"id": p.id, "name": p.name, "created_at": p.created_at}
+def project_json(svc: Services, p: Any) -> dict[str, Any]:
+    return {
+        "id": p.id,
+        "name": p.name,
+        "created_at": p.created_at,
+        "tailored": svc.overlays.exists(p.id),
+    }
 
 
 def require_project(svc: Services, project_id: int) -> None:
@@ -147,12 +155,10 @@ def require_project(svc: Services, project_id: int) -> None:
 
 @router.get("/projects")
 def list_projects(svc: Svc) -> list[dict[str, Any]]:
-    return [project_json(p) for p in svc.db.list_projects()]
+    return [project_json(svc, p) for p in svc.db.list_projects()]
 
 
-@router.post("/projects", status_code=201)
-def create_project(body: ProjectBody, svc: Svc) -> dict[str, Any]:
-    return project_json(svc.db.create_project(body.name.strip()))
+# Projects are created by completing an interview (POST /api/interviews/{id}/advance).
 
 
 @router.get("/projects/{project_id}")
@@ -160,7 +166,7 @@ def get_project(project_id: int, svc: Svc) -> dict[str, Any]:
     p = svc.db.get_project(project_id)
     if p is None:
         raise HTTPException(404, "Unknown project")
-    return project_json(p)
+    return project_json(svc, p)
 
 
 @router.patch("/projects/{project_id}")
@@ -174,6 +180,11 @@ def rename_project(project_id: int, body: ProjectBody, svc: Svc) -> dict[str, An
 def delete_project(project_id: int, svc: Svc) -> None:
     if not svc.db.delete_project(project_id):
         raise HTTPException(404, "Unknown project")
+    svc.overlays.delete(project_id)
+    for draft in svc.interviews.list():
+        if draft.project_id == project_id:
+            with contextlib.suppress(InterviewError):
+                svc.interviews.delete(draft.id)
 
 
 @router.get("/projects/{project_id}/graph")
@@ -181,7 +192,18 @@ def project_graph(project_id: int, svc: Svc, edit: bool = False) -> GraphView:
     require_project(svc, project_id)
     onto, digest = load_ontology(svc)
     live = set(svc.chunks.get()) if svc.settings.chunks_path.exists() else None
-    return build_view(onto, svc.db.project_state(project_id), digest, edit, live)
+    progress = svc.db.project_state(project_id)
+    if not svc.overlays.exists(project_id):
+        return build_view(onto, progress, digest, edit, live)
+    try:
+        overlay, overlay_hash = svc.overlays.store(project_id).load()
+        defn, _ = svc.interview_def.load()
+    except ValueError as exc:
+        raise HTTPException(503, {"code": "invalid_overlay", "message": str(exc)}) from exc
+    graph, meta = compose(
+        onto, overlay, overlay_hash, facet_answers(defn, overlay.answers), include_proposed=edit
+    )
+    return build_view(graph, progress, digest, edit, live, meta)
 
 
 class CompleteBody(BaseModel):

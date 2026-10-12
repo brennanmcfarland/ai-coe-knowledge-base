@@ -96,11 +96,8 @@ class ProgressDB:
         return Project(r["id"], r["name"], r["created_at"]) if r else None
 
     def create_project(self, name: str) -> Project:
-        now = time.time()
         with self.transaction() as c:
-            cur = c.execute("INSERT INTO projects (name, created_at) VALUES (?, ?)", (name, now))
-            assert cur.lastrowid is not None
-            return Project(cur.lastrowid, name, now)
+            return self.insert_project(c, name)
 
     def rename_project(self, project_id: int, name: str) -> bool:
         with self.transaction() as c:
@@ -154,8 +151,28 @@ class ProgressDB:
     # --- Ontology edits (called inside a transaction alongside the YAML write) -------------
 
     @staticmethod
-    def set_hidden(c: sqlite3.Connection, node_id: str, hidden: bool) -> None:
-        c.execute("UPDATE node_progress SET hidden = ? WHERE node_id = ?", (int(hidden), node_id))
+    def insert_project(c: sqlite3.Connection, name: str) -> Project:
+        """Create a project inside a caller's transaction (e.g. alongside its overlay file)."""
+        now = time.time()
+        cur = c.execute("INSERT INTO projects (name, created_at) VALUES (?, ?)", (name, now))
+        assert cur.lastrowid is not None
+        return Project(cur.lastrowid, name, now)
+
+    @staticmethod
+    def set_hidden(
+        c: sqlite3.Connection, node_id: str, hidden: bool, project_id: int | None = None
+    ) -> None:
+        """Hide/unhide progress on a node: in every project, or only in `project_id` (used for
+        project-specific steps)."""
+        if project_id is None:
+            c.execute(
+                "UPDATE node_progress SET hidden = ? WHERE node_id = ?", (int(hidden), node_id)
+            )
+        else:
+            c.execute(
+                "UPDATE node_progress SET hidden = ? WHERE node_id = ? AND project_id = ?",
+                (int(hidden), node_id, project_id),
+            )
 
     @staticmethod
     def migrate_node(c: sqlite3.Connection, source: str, target: str) -> None:

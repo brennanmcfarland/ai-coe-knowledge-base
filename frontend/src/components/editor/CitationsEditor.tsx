@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, Trash2 } from 'lucide-react'
-import { api, edits, type Citation, type GraphNode } from '@/api'
+import { api, edits, type Citation, type GraphNode, type NodeOps } from '@/api'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 interface Props {
   node: GraphNode
   run: (fn: (hash: string) => Promise<unknown>) => Promise<unknown>
+  ops?: NodeOps
 }
 
 function ChunkPicker({ onPick, onClose }: { onPick: (chunkId: string) => void; onClose: () => void }) {
@@ -42,10 +43,10 @@ function ChunkPicker({ onPick, onClose }: { onPick: (chunkId: string) => void; o
 }
 
 /** Remove a citation, re-attach it to a different passage (keeping its [n] marker), or add one. */
-export function CitationsEditor({ node, run }: Props) {
+export function CitationsEditor({ node, run, ops = edits }: Props) {
   const [picking, setPicking] = useState<{ replace: Citation | null } | null>(null)
   const save = (items: { chunk_id: string; n: number | null }[]) =>
-    run((h) => edits.setCitations(h, node.id, items))
+    run((h) => ops.setCitations(h, node.id, items))
   const current = node.citations.map((c) => ({ chunk_id: c.chunk_id, n: c.n as number | null }))
 
   return (

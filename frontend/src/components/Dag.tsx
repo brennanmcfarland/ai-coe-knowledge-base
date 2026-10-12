@@ -14,7 +14,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import { Graph as DagreGraph, layout } from '@dagrejs/dagre'
 import { CheckCircle2, Circle, Lock } from 'lucide-react'
-import type { Graph, GraphNode } from '@/api'
+import type { Graph, GraphEdge, GraphNode } from '@/api'
 import { cn } from '@/lib/utils'
 
 const NODE_W = 220
@@ -36,9 +36,11 @@ function StepNodeView({ data }: NodeProps<StepNode>) {
     <div
       data-testid={`dag-node-${node.id}`}
       data-state={node.state}
+      data-scope={node.scope}
       className={cn(
-        'flex h-full w-full cursor-pointer items-center gap-2 rounded-lg border-2 px-3 text-sm shadow-sm',
+        'relative flex h-full w-full cursor-pointer items-center gap-2 rounded-lg border-2 px-3 text-sm shadow-sm',
         stateStyles[node.state],
+        node.scope === 'project' && 'border-l-8 border-l-violet-500',
         node.status === 'proposed' && 'border-dashed border-amber-500 opacity-100',
       )}
     >
@@ -46,6 +48,18 @@ function StepNodeView({ data }: NodeProps<StepNode>) {
       <Icon className="size-4 shrink-0" aria-hidden />
       <span className="line-clamp-2 font-medium">{node.title}</span>
       {node.status === 'proposed' && <span className="ml-auto text-xs text-amber-600">proposed</span>}
+      {!node.grounded && (
+        <span
+          className="ml-auto shrink-0 rounded bg-amber-100 px-1 text-[10px] text-amber-800 dark:bg-amber-900 dark:text-amber-100"
+          title="Not from the knowledge base"
+          data-testid={`not-from-kb-${node.id}`}
+        >
+          Not from KB
+        </span>
+      )}
+      {node.is_new && (
+        <span className="absolute -top-2 -right-2 rounded-full bg-sky-600 px-1.5 text-[10px] text-white">new</span>
+      )}
       <Handle type="source" position={Position.Bottom} isConnectable={editing} />
     </div>
   )
@@ -73,7 +87,7 @@ interface DagProps {
   editing: boolean
   onOpen: (nodeId: string) => void
   onConnect?: (source: string, target: string) => void
-  onDeleteEdge?: (source: string, target: string) => void
+  onDeleteEdge?: (edge: GraphEdge) => void
 }
 
 export function Dag({ graph, editing, onOpen, onConnect, onDeleteEdge }: DagProps) {
@@ -92,10 +106,18 @@ export function Dag({ graph, editing, onOpen, onConnect, onDeleteEdge }: DagProp
       id: `${e.source}->${e.target}`,
       source: e.source,
       target: e.target,
-      deletable: editing,
+      // Bridges stand in for a path through steps this project hides; there's nothing to delete.
+      deletable: editing && e.scope !== 'bridge',
       markerEnd: { type: MarkerType.ArrowClosed },
-      style: e.status === 'proposed' ? { strokeDasharray: '6 4', stroke: '#f59e0b' } : undefined,
-      data: { status: e.status },
+      style:
+        e.status === 'proposed'
+          ? { strokeDasharray: '6 4', stroke: '#f59e0b' }
+          : e.scope === 'bridge'
+            ? { strokeDasharray: '2 4' }
+            : e.scope === 'project'
+              ? { stroke: '#8b5cf6' }
+              : undefined,
+      data: { status: e.status, scope: e.scope },
     }))
     return { nodes, edges }
   }, [graph, editing])
@@ -116,7 +138,12 @@ export function Dag({ graph, editing, onOpen, onConnect, onDeleteEdge }: DagProp
         onConnect={(c: Connection) => {
           if (c.source && c.target && c.source !== c.target) onConnect?.(c.source, c.target)
         }}
-        onEdgesDelete={(deleted) => deleted.forEach((e) => onDeleteEdge?.(e.source, e.target))}
+        onEdgesDelete={(deleted) =>
+          deleted.forEach((d) => {
+            const e = graph.edges.find((x) => x.source === d.source && x.target === d.target)
+            if (e) onDeleteEdge?.(e)
+          })
+        }
         proOptions={{ hideAttribution: true }}
       >
         <Background />

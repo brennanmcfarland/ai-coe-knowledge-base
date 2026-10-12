@@ -1,13 +1,13 @@
 import { useState } from 'react'
-import { ArrowLeft, ArrowRight, Pencil } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ArrowRight, Pencil } from 'lucide-react'
 import { Link, useParams } from 'react-router'
-import type { Citation } from '@/api'
+import { nodeOps, type Citation } from '@/api'
 import { CitationPanel } from '@/components/CitationPanel'
 import { ChecklistEditor } from '@/components/editor/ChecklistEditor'
 import { CitationsEditor } from '@/components/editor/CitationsEditor'
 import { NodeEditTools } from '@/components/editor/NodeEditTools'
 import { Summary } from '@/components/Summary'
-import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -51,6 +51,9 @@ export function NodePage() {
     )
   }
 
+  const isProject = node.scope === 'project'
+  const run = isProject ? edit.runProject : edit.run
+  const ops = nodeOps(pid, node)
   const byId = new Map(g.nodes.map((n) => [n.id, n]))
   const nodeLink = (id: string) => `/projects/${pid}/nodes/${encodeURIComponent(id)}`
   const front = frontier(g)
@@ -95,6 +98,12 @@ export function NodePage() {
             {stateLabel[node.state]}
           </Badge>
           {node.status === 'proposed' && <Badge variant="outline">Proposed</Badge>}
+          {isProject && (
+            <Badge variant="outline" data-testid="project-step-badge">
+              Specific to this project
+            </Badge>
+          )}
+          {node.is_new && <Badge variant="outline">New</Badge>}
         </div>
         <h1 className="text-2xl font-semibold" data-testid="node-title">
           {node.title}
@@ -114,7 +123,18 @@ export function NodePage() {
         )}
       </header>
 
-      {editing && <NodeEditTools key={node.id + node.title} pid={pid} node={node} graph={g} run={edit.run} />}
+      {editing && <NodeEditTools key={node.id + node.title} pid={pid} node={node} graph={g} run={run} />}
+
+      {!node.grounded && (
+        <Alert className="border-amber-500 text-amber-800 dark:text-amber-200" data-testid="not-from-kb">
+          <AlertTriangle />
+          <AlertTitle>Not from the knowledge base</AlertTitle>
+          <AlertDescription>
+            No knowledge-base document covers this step, so its guidance was written from the model's general
+            knowledge. Check it before relying on it{editing ? ', or attach a source below' : ''}.
+          </AlertDescription>
+        </Alert>
+      )}
 
       <section>
         <Summary summary={node.summary} citations={node.citations} onCite={setCitation} />
@@ -130,7 +150,7 @@ export function NodePage() {
           )}
         </div>
         {editing && editingChecklist ? (
-          <ChecklistEditor node={node} run={edit.run} onDone={() => setEditingChecklist(false)} />
+          <ChecklistEditor node={node} run={run} ops={ops} onDone={() => setEditingChecklist(false)} />
         ) : node.checklist.length === 0 ? (
           <p className="text-sm text-muted-foreground">No checklist for this step.</p>
         ) : (
@@ -175,7 +195,7 @@ export function NodePage() {
       {editing && (
         <section className="flex flex-col gap-2">
           <h2 className="text-lg font-semibold">Citations</h2>
-          <CitationsEditor node={node} run={edit.run} />
+          <CitationsEditor node={node} run={run} ops={ops} />
         </section>
       )}
 

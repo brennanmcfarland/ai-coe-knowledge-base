@@ -6,8 +6,10 @@ Rules:
   always refresh.
 - Nodes/edges the LLM produces that don't exist yet arrive as `proposed`, unless the curator
   previously rejected or deleted them.
-- Stale proposals (no longer produced by the LLM) are dropped. Accepted items are never removed
-  by a rebuild.
+- Stale proposals (no longer produced by the LLM) are dropped, unless they have locked fields
+  (curator-made, e.g. promoted from a project). Accepted items are never removed by a rebuild.
+- Facet tags refresh like the other fields unless locked. `grounded` only ever turns on (once a
+  node has citations).
 """
 
 import re
@@ -49,7 +51,7 @@ def merge_ontology(existing: Ontology, built: Ontology) -> Ontology:
     for cur in existing.nodes:
         fresh = built_nodes.get(cur.id)
         if fresh is None:
-            if cur.status == "proposed":
+            if cur.status == "proposed" and not cur.locked_fields:
                 continue
             nodes.append(cur.model_copy(deep=True))
             continue
@@ -63,6 +65,9 @@ def merge_ontology(existing: Ontology, built: Ontology) -> Ontology:
             merged.summary = fresh.summary
         else:
             merged.summary = remap_markers(fresh.summary, fresh.citations, cur.citations)
+        if "facets" not in cur.locked_fields:
+            merged.facets = {k: list(v) for k, v in fresh.facets.items()}
+        merged.grounded = cur.grounded or bool(merged.citations)
         nodes.append(merged)
 
     known = {n.id for n in nodes}

@@ -9,8 +9,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Status = Literal["accepted", "proposed"]
-LockableField = Literal["title", "checklist", "citations"]
-LOCKABLE_FIELDS: tuple[LockableField, ...] = ("title", "checklist", "citations")
+LockableField = Literal["title", "checklist", "citations", "facets"]
+LOCKABLE_FIELDS: tuple[LockableField, ...] = ("title", "checklist", "citations", "facets")
+# facet id (an interview question id) -> values (that question's option values)
+Facets = dict[str, list[str]]
 
 
 def slugify(text: str) -> str:
@@ -44,6 +46,10 @@ class Node(BaseModel):
     summary: str = ""
     checklist: list[ChecklistItem] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
+    # Empty facets = universal: the step applies to every project.
+    facets: Facets = Field(default_factory=dict)
+    # False for steps written from general knowledge rather than the KB ("Not from KB").
+    grounded: bool = True
     status: Status = "accepted"
     locked_fields: list[LockableField] = Field(default_factory=list)
 

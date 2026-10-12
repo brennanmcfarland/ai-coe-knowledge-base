@@ -47,6 +47,11 @@ nodes:
     title: Load testing
     summary: Proposed by the last build.
     status: proposed
+  # Facet-tagged: only projects whose interview answers include cardiology see it.
+  - id: cardiology-registries
+    title: Cardiology registries
+    summary: Find cardiology registry data.
+    facets: {domain: [cardiology]}
 edges:
   - {from: define-goals, to: procure-data}
   - {from: define-goals, to: system-design}

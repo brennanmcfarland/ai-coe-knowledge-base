@@ -29,8 +29,17 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
         yield c
 
 
+def project(client: TestClient, name: str) -> int:
+    """An untailored project (as if created before interviews existed)."""
+    return client.app.state.services.db.create_project(name).id  # type: ignore[attr-defined]
+
+
+def test_projects_cannot_be_created_without_an_interview(client: TestClient) -> None:
+    assert client.post("/api/projects", json={"name": "App"}).status_code == 405
+
+
 def test_progress_round_trip_and_frontier(client: TestClient) -> None:
-    pid = client.post("/api/projects", json={"name": "App"}).json()["id"]
+    pid = project(client, "App")
     graph = client.get(f"/api/projects/{pid}/graph").json()
     assert {n["id"]: n["state"] for n in graph["nodes"]} == {"a": "frontier", "b": "locked"}
 
@@ -43,15 +52,14 @@ def test_progress_round_trip_and_frontier(client: TestClient) -> None:
 
 
 def test_projects_are_isolated(client: TestClient) -> None:
-    p1 = client.post("/api/projects", json={"name": "One"}).json()["id"]
-    p2 = client.post("/api/projects", json={"name": "Two"}).json()["id"]
+    p1, p2 = project(client, "One"), project(client, "Two")
     client.put(f"/api/projects/{p1}/nodes/a/complete", json={"completed": True})
     states = {n["id"]: n["state"] for n in client.get(f"/api/projects/{p2}/graph").json()["nodes"]}
     assert states["a"] == "frontier"
 
 
 def test_edit_requires_current_hash(client: TestClient) -> None:
-    pid = client.post("/api/projects", json={"name": "App"}).json()["id"]
+    pid = project(client, "App")
     h = client.get(f"/api/projects/{pid}/graph?edit=true").json()["hash"]
     r = client.patch("/api/ontology/nodes/a", json={"title": "A2"}, headers={"If-Match": h})
     assert r.status_code == 200
@@ -67,7 +75,7 @@ def test_edit_requires_current_hash(client: TestClient) -> None:
 
 def test_invalid_ontology_is_reported(client: TestClient, tmp_path: Path) -> None:
     (tmp_path / "ontology.yaml").write_text("nodes:\n  - {title: no id}\n")
-    pid = client.post("/api/projects", json={"name": "App"}).json()["id"]
+    pid = project(client, "App")
     r = client.get(f"/api/projects/{pid}/graph")
     assert r.status_code == 503 and r.json()["detail"]["code"] == "invalid_ontology"
     assert client.get("/api/ontology/status").json()["valid"] is False

@@ -1,50 +1,21 @@
 """Long-lived objects shared by the API routes."""
 
-import asyncio
-import time
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
-from typing import Literal
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from .auth import AuthManager, CredentialStore
 from .chunks import Chunk, read_chunks
 from .clickup import ClickUpClient
 from .config import Settings
+from .interview.definition import InterviewDef, ensure_seeded
+from .interview.overlay import OverlayEditor, OverlayRepo
+from .interview.service import InterviewService
+from .jobs import SyncJob
+from .llm_server import ExternalProvider, LLMProvider, ManagedProvider, ServerConfig
 from .ontology.editor import Editor
-from .ontology.store import OntologyStore
+from .ontology.store import OntologyStore, YamlStore
 from .scraper import load_manifest, scrape_space
 from .state import ProgressDB
-
-SyncState = Literal["idle", "running", "succeeded", "failed"]
-
-
-@dataclass
-class SyncJob:
-    state: SyncState = "idle"
-    messages: list[str] = field(default_factory=list)
-    error: str | None = None
-    started_at: float | None = None
-    finished_at: float | None = None
-    _task: asyncio.Task[None] | None = None
-
-    def start(self, run: Callable[[Callable[[str], None]], Awaitable[None]]) -> bool:
-        if self.state == "running":
-            return False
-        self.state, self.messages, self.error = "running", [], None
-        self.started_at, self.finished_at = time.time(), None
-        self._task = asyncio.create_task(self._run(run))
-        return True
-
-    async def _run(self, run: Callable[[Callable[[str], None]], Awaitable[None]]) -> None:
-        try:
-            await run(self.messages.append)
-            self.state = "succeeded"
-        except Exception as exc:  # surfaced to the UI and scrape.sh
-            self.error = str(exc)
-            self.messages.append(f"Error: {exc}")
-            self.state = "failed"
-        finally:
-            self.finished_at = time.time()
 
 
 class ChunkCache:
@@ -61,6 +32,16 @@ class ChunkCache:
         return self._chunks
 
 
+def make_provider(settings: Settings) -> LLMProvider:
+    if settings.fake_llm:
+        from .fake_llm import FakeProvider
+
+        return FakeProvider()
+    if settings.llama_url:
+        return ExternalProvider(settings.llama_url)
+    return ManagedProvider(ServerConfig.from_env(settings.cache_dir, settings.llm_idle_timeout))
+
+
 @dataclass
 class Services:
     settings: Settings
@@ -70,11 +51,22 @@ class Services:
     editor: Editor
     chunks: ChunkCache
     sync: SyncJob
+    interview_def: YamlStore[InterviewDef]
+    overlays: OverlayRepo
+    overlay_editor: OverlayEditor
+    interviews: InterviewService
+    llm: LLMProvider
 
     @classmethod
     def create(cls, settings: Settings, credentials: CredentialStore) -> Services:
         settings.data_dir.mkdir(parents=True, exist_ok=True)
+        settings.projects_dir.mkdir(parents=True, exist_ok=True)
+        settings.interviews_dir.mkdir(parents=True, exist_ok=True)
+        ensure_seeded(settings.interview_path)
         store = OntologyStore(settings.ontology_path, settings.backups_dir)
+        interview_def = YamlStore(
+            settings.interview_path, settings.backups_dir, InterviewDef, "interview"
+        )
         db = ProgressDB(settings.db_path)
 
         def chunk_stat() -> object:
@@ -82,14 +74,25 @@ class Services:
             return p.stat().st_mtime_ns if p.exists() else None
 
         chunks = ChunkCache(chunk_stat, lambda: read_chunks(settings.chunks_path))
+        overlays = OverlayRepo(settings.projects_dir, settings.backups_dir)
+        llm = make_provider(settings)
         return cls(
             settings=settings,
             auth=AuthManager(credentials, settings.redirect_uri),
             store=store,
             db=db,
-            editor=Editor(store, db, chunks.get),
+            editor=Editor(store, db, chunks.get, overlays),
             chunks=chunks,
             sync=SyncJob(),
+            interview_def=interview_def,
+            overlays=overlays,
+            overlay_editor=OverlayEditor(
+                overlays, store, lambda: interview_def.load()[0], db, chunks.get
+            ),
+            interviews=InterviewService(
+                interview_def, store, db, overlays, settings.interviews_dir, llm, chunks.get
+            ),
+            llm=llm,
         )
 
     async def run_scrape(self, log: Callable[[str], None]) -> None:

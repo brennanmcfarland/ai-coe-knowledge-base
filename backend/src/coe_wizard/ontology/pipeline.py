@@ -17,17 +17,19 @@ reply has to restate the whole ontology (long replies get cut off at max_tokens)
 
 import json
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from ..chunks import Chunk
+from ..facets import union
 from ..llm import LLMBackend
 from .model import (
     ChecklistItem,
     Citation,
     Edge,
+    Facets,
     Node,
     Ontology,
     checklist_item_id,
@@ -61,6 +63,22 @@ MAP_SCHEMA: dict[str, Any] = {
     "required": ["steps"],
     "additionalProperties": False,
 }
+
+def map_schema(facets: Mapping[str, Sequence[str]]) -> dict[str, Any]:
+    """MAP_SCHEMA plus, when there are facets, per-chunk facet tags constrained to known values
+    and free-text proposals for values the facet lists lack."""
+    if not facets:
+        return MAP_SCHEMA
+    tags = _object({f: {"type": "array", "items": _enum(v)} for f, v in facets.items() if v})
+    proposal = _object({"facet": _enum(list(facets)), "value": {"type": "string"}})
+    return _object(
+        {
+            "steps": MAP_SCHEMA["properties"]["steps"],
+            "facets": tags,
+            "new_values": {"type": "array", "items": proposal},
+        }
+    )
+
 
 MERGE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -126,6 +144,37 @@ Excerpt (from "{doc}" / "{page}"):
 ---
 {text}
 ---"""
+
+MAP_FACETS = """
+
+Also tag the excerpt with the facet values below that it is specifically about, so the guide can \
+be tailored to each project. Leave a facet empty when the excerpt is general or doesn't say. If \
+the excerpt is specifically about something a facet's list lacks (e.g. a disease area), add it \
+to `new_values` with a short human-readable label.
+{facets}"""
+
+QUESTIONS_SCHEMA_ITEM: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string"},
+        "kind": {"type": "string", "enum": ["single", "multi"]},
+        "options": _STR_LIST,
+    },
+    "required": ["text", "kind", "options"],
+    "additionalProperties": False,
+}
+
+QUESTIONS_PROMPT = """A guide that walks teams through building applications is tailored to each \
+project by an interview. These are its current questions:
+{questions}
+
+These are the knowledge-base documents the guide is built from:
+{docs}
+
+Propose up to 3 new multiple-choice questions whose answers would change which knowledge-base \
+material applies to a project (for example a domain or data type the documents cover but no \
+question asks about). Put each in one of these sections: {sections}. Don't repeat or rephrase \
+existing questions. Return an empty list if none are needed."""
 
 PLACE_PROMPT = """You are maintaining the list of distinct steps in a guide that walks a team \
 through building an application. Decide where the candidate step below belongs.
@@ -214,14 +263,43 @@ def _dedupe(items: Sequence[str]) -> list[str]:
     return out
 
 
+@dataclass
+class MapResult:
+    candidates: list[Candidate] = field(default_factory=list)
+    chunk_facets: dict[str, Facets] = field(default_factory=dict)
+    new_values: dict[str, list[str]] = field(default_factory=dict)
+
+
+def _facet_listing(facets: Mapping[str, Sequence[str]]) -> str:
+    return "\n".join(f"- {f}: {', '.join(v)}" for f, v in facets.items() if v)
+
+
 async def map_chunks(
-    llm: LLMBackend, chunks: Sequence[Chunk], progress: Progress
-) -> list[Candidate]:
-    out: list[Candidate] = []
+    llm: LLMBackend,
+    chunks: Sequence[Chunk],
+    progress: Progress,
+    facets: Mapping[str, Sequence[str]] | None = None,
+) -> MapResult:
+    facets = {f: list(v) for f, v in (facets or {}).items() if v}
+    schema = map_schema(facets)
+    suffix = MAP_FACETS.format(facets=_facet_listing(facets)) if facets else ""
+    res = MapResult()
+    out = res.candidates
     for i, chunk in enumerate(chunks, 1):
         progress(f"map {i}/{len(chunks)}")
         prompt = MAP_PROMPT.format(doc=chunk.doc_title, page=chunk.page_title, text=chunk.text)
-        result = await llm.complete(prompt, MAP_SCHEMA)
+        result = await llm.complete(prompt + suffix, schema)
+        if facets:
+            tags = result.get("facets") or {}
+            res.chunk_facets[chunk.id] = {
+                f: _dedupe([v for v in tags.get(f, []) if v in allowed])
+                for f, allowed in facets.items()
+                if any(v in allowed for v in tags.get(f, []))
+            }
+            for nv in result.get("new_values") or []:
+                if nv.get("facet") in facets and str(nv.get("value", "")).strip():
+                    have = res.new_values.setdefault(nv["facet"], [])
+                    have[:] = _dedupe([*have, nv["value"]])
         for step in result.get("steps", []):
             if step.get("title", "").strip():
                 out.append(
@@ -232,7 +310,7 @@ async def map_chunks(
                         chunk_ids=[chunk.id],
                     )
                 )
-    return out
+    return res
 
 
 class StepDoc:
@@ -462,18 +540,70 @@ async def summarize(
     return render_citations(result.get("summary", "").strip(), sources)
 
 
+@dataclass
+class BuildResult:
+    ontology: Ontology
+    # Facet tags per chunk id (only for chunks mapped in this build).
+    chunk_facets: dict[str, Facets] = field(default_factory=dict)
+    # Proposed new facet values (labels) per facet id.
+    new_values: dict[str, list[str]] = field(default_factory=dict)
+
+
+async def propose_questions(
+    llm: LLMBackend,
+    questions: Sequence[str],
+    sections: Sequence[str],
+    doc_titles: Sequence[str],
+) -> list[dict[str, Any]]:
+    """Ask once per build for new facet questions the corpus suggests (see interview.yaml)."""
+    if not sections:
+        return []
+    schema = _object(
+        {
+            "questions": {
+                "type": "array",
+                "items": {
+                    **QUESTIONS_SCHEMA_ITEM,
+                    "properties": {
+                        **QUESTIONS_SCHEMA_ITEM["properties"],
+                        "section": _enum(sections),
+                    },
+                    "required": [*QUESTIONS_SCHEMA_ITEM["required"], "section"],
+                },
+            }
+        }
+    )
+    result = await llm.complete(
+        QUESTIONS_PROMPT.format(
+            questions="\n".join(f"- {q}" for q in questions) or "(none)",
+            docs="\n".join(f"- {d}" for d in doc_titles) or "(none)",
+            sections=", ".join(sections),
+        ),
+        schema,
+    )
+    return list(result.get("questions") or [])[:3]
+
+
 async def build_ontology(
     llm: LLMBackend,
     chunks: dict[str, Chunk],
     existing: Ontology,
     progress: Progress = lambda _m: None,
     doc_path: Path | None = None,
-) -> Ontology:
+    facets: Mapping[str, Sequence[str]] | None = None,
+) -> BuildResult:
     ordered = list(chunks.values())
-    candidates = await map_chunks(llm, ordered, progress)
+    mapped = await map_chunks(llm, ordered, progress, facets)
+    candidates = mapped.candidates
     progress(f"{len(candidates)} candidate steps")
     if not candidates:
-        return Ontology()
+        return BuildResult(Ontology(), mapped.chunk_facets, mapped.new_values)
+
+    def chunk_tags(cid: str) -> Facets:
+        if cid in mapped.chunk_facets:
+            return mapped.chunk_facets[cid]
+        return chunks[cid].facets if cid in chunks else {}
+
     built = await reduce_candidates(llm, candidates, existing.nodes, progress, doc_path)
     progress(f"{len(built)} nodes")
     edges = await infer_edges(llm, built, progress)
@@ -489,6 +619,8 @@ async def build_ontology(
                 summary=summary,
                 checklist=[ChecklistItem(id=checklist_item_id(t), text=t) for t in b.checklist],
                 citations=citations,
+                facets=union([chunk_tags(c) for c in b.chunk_ids]),
             )
         )
-    return Ontology(nodes=nodes, edges=[Edge.of(s, t) for s, t in edges])
+    onto = Ontology(nodes=nodes, edges=[Edge.of(s, t) for s, t in edges])
+    return BuildResult(onto, mapped.chunk_facets, mapped.new_values)

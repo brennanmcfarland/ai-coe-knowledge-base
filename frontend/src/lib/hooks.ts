@@ -64,9 +64,12 @@ export function useProgressMutations(pid: number) {
   return { setChecked, setCompleted }
 }
 
+export type EditRun = (fn: (hash: string) => Promise<unknown>) => Promise<unknown>
+
 /**
- * Runs an ontology edit with the graph's current hash. On a stale-hash 409 it refetches and
- * reports the conflict instead of retrying, since the user should see what changed.
+ * Runs an ontology edit with the graph's current hash: `run` for the global ontology, `runProject`
+ * for the project's own overlay (its generated steps and proposals). On a stale-hash 409 it
+ * refetches and reports the conflict instead of retrying, since the user should see what changed.
  */
 export function useOntologyEdit(pid: number) {
   const qc = useQueryClient()
@@ -74,10 +77,12 @@ export function useOntologyEdit(pid: number) {
   const [error, setError] = useState<string | null>(null)
 
   const mutation = useMutation({
-    mutationFn: async (fn: (hash: string) => Promise<unknown>) => {
+    mutationFn: async ({ fn, project }: { fn: (hash: string) => Promise<unknown>; project: boolean }) => {
       const graph = qc.getQueryData<Graph>(graphKey(pid, editing))
       if (!graph) throw new Error('Graph not loaded')
-      return fn(graph.hash)
+      const hash = project ? graph.overlay_hash : graph.hash
+      if (hash === null) throw new Error('This project isn’t tailored')
+      return fn(hash)
     },
     onMutate: () => setError(null),
     onError: (e) => {
@@ -87,10 +92,14 @@ export function useOntologyEdit(pid: number) {
         setError(e instanceof Error ? e.message : String(e))
       }
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: ['graph'] }),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['graph'] })
+      qc.invalidateQueries({ queryKey: ['projects'] })
+    },
   })
 
   // Errors are surfaced through `error`; resolve to undefined so callers needn't catch.
-  const run = (fn: (hash: string) => Promise<unknown>) => mutation.mutateAsync(fn).catch(() => undefined)
-  return { run, pending: mutation.isPending, error, clearError: () => setError(null) }
+  const run: EditRun = (fn) => mutation.mutateAsync({ fn, project: false }).catch(() => undefined)
+  const runProject: EditRun = (fn) => mutation.mutateAsync({ fn, project: true }).catch(() => undefined)
+  return { run, runProject, pending: mutation.isPending, error, clearError: () => setError(null) }
 }

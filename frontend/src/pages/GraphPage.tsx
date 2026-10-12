@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight } from 'lucide-react'
+import { ArrowRight, RefreshCw, Wand2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router'
-import { api, edits } from '@/api'
+import { api, edits, projectEdits } from '@/api'
 import { Dag } from '@/components/Dag'
 import { ProposalsDialog } from '@/components/editor/ProposalsDialog'
+import { ReviewChangesDialog } from '@/components/ReviewChangesDialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -33,6 +34,11 @@ export function GraphPage() {
   const g = graph.data
   const done = g.nodes.filter((n) => n.completed).length
   const next = frontier(g)[0]
+  const scopeOf = (id: string) => g.nodes.find((n) => n.id === id)?.scope
+  const tailor = async () => {
+    const draft = await api.retailor(pid)
+    navigate(`/interviews/${draft.id}`)
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -48,6 +54,18 @@ export function GraphPage() {
             <Link to={`/projects/${pid}/nodes/${encodeURIComponent(next.id)}`}>
               Next: {next.title} <ArrowRight />
             </Link>
+          </Button>
+        )}
+        {g.tailored ? (
+          <>
+            <ReviewChangesDialog pid={pid} graph={g} run={edit.runProject} />
+            <Button size="sm" variant="ghost" onClick={tailor} data-testid="retailor">
+              <RefreshCw /> Re-tailor
+            </Button>
+          </>
+        ) : (
+          <Button size="sm" variant="outline" onClick={tailor} data-testid="tailor-project">
+            <Wand2 /> Tailor this project
           </Button>
         )}
         {editing && (
@@ -98,8 +116,17 @@ export function GraphPage() {
             graph={g}
             editing={editing}
             onOpen={(id) => navigate(`/projects/${pid}/nodes/${encodeURIComponent(id)}`)}
-            onConnect={(s, t) => edit.run((h) => edits.addEdge(h, s, t))}
-            onDeleteEdge={(s, t) => edit.run((h) => edits.deleteEdge(h, s, t))}
+            onConnect={(s, t) =>
+              // Edges touching a project-specific step belong to the project, others are global.
+              scopeOf(s) === 'project' || scopeOf(t) === 'project'
+                ? edit.runProject((h) => projectEdits(pid).addEdge(h, s, t))
+                : edit.run((h) => edits.addEdge(h, s, t))
+            }
+            onDeleteEdge={(e) =>
+              e.scope === 'project'
+                ? edit.runProject((h) => projectEdits(pid).deleteEdge(h, e.source, e.target))
+                : edit.run((h) => edits.deleteEdge(h, e.source, e.target))
+            }
           />
         )}
       </div>

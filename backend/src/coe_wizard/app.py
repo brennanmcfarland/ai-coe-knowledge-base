@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from .api import router
 from .auth import CredentialStore, KeyringCredentialStore
 from .config import Settings
+from .interview_api import router as interview_router
 from .services import Services
 
 
@@ -21,11 +22,13 @@ def create_app(settings: Settings, credentials: CredentialStore | None = None) -
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         yield
         await svc.auth.http.aclose()
+        await svc.llm.aclose()
         svc.db.close()
 
     app = FastAPI(title="CoE Wizard", lifespan=lifespan)
     app.state.services = svc
     app.include_router(router)
+    app.include_router(interview_router)
 
     if settings.static_dir is not None:
         _mount_spa(app, settings.static_dir)
